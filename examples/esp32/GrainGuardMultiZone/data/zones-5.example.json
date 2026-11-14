@@ -1,0 +1,104 @@
+{
+  "hardware_confirmed": false,
+  "timing": {
+    "sample_interval_ms": 60000,
+    "min_fan_on_ms": 60000,
+    "min_fan_off_ms": 60000,
+    "sensor_fault_hold_ms": 120000
+  },
+  "i2c": {
+    "sda_gpio": 13,
+    "scl_gpio": 14
+  },
+  "outside_air": {
+    "kind": "dht22_gpio",
+    "gpio": 27
+  },
+  "zones": [
+    {
+      "zone_id": "",
+      "storage_unit_id": "",
+      "sensor_code": "",
+      "device_id": "",
+      "device_api_key": "",
+      "dht22": { "kind": "gpio", "gpio": 4 },
+      "mq2": { "kind": "esp32_adc", "gpio": 34 },
+      "fan": { "kind": "gpio", "gpio": 21, "active_high": true },
+      "led": { "kind": "mcp23017", "address": "0x20", "channel": 0, "active_high": true },
+      "thresholds": {
+        "temperature_on_c": 30,
+        "temperature_off_c": 28,
+        "humidity_on_pct": 70,
+        "humidity_off_pct": 65
+      }
+    },
+    {
+      "zone_id": "",
+      "storage_unit_id": "",
+      "sensor_code": "",
+      "device_id": "",
+      "device_api_key": "",
+      "dht22": { "kind": "gpio", "gpio": 16 },
+      "mq2": { "kind": "esp32_adc", "gpio": 35 },
+      "fan": { "kind": "gpio", "gpio": 22, "active_high": true },
+      "led": { "kind": "mcp23017", "address": "0x20", "channel": 1, "active_high": true },
+      "thresholds": {
+        "temperature_on_c": 30,
+        "temperature_off_c": 28,
+        "humidity_on_pct": 70,
+        "humidity_off_pct": 65
+      }
+    },
+    {
+      "zone_id": "",
+      "storage_unit_id": "",
+      "sensor_code": "",
+      "device_id": "",
+      "device_api_key": "",
+      "dht22": { "kind": "gpio", "gpio": 17 },
+      "mq2": { "kind": "esp32_adc", "gpio": 36 },
+      "fan": { "kind": "gpio", "gpio": 23, "active_high": true },
+      "led": { "kind": "mcp23017", "address": "0x20", "channel": 2, "active_high": true },
+      "thresholds": {
+        "temperature_on_c": 30,
+        "temperature_off_c": 28,
+        "humidity_on_pct": 70,
+        "humidity_off_pct": 65
+      }
+    },
+    {
+      "zone_id": "",
+      "storage_unit_id": "",
+      "sensor_code": "",
+      "device_id": "",
+      "device_api_key": "",
+      "dht22": { "kind": "gpio", "gpio": 18 },
+      "mq2": { "kind": "esp32_adc", "gpio": 39 },
+      "fan": { "kind": "gpio", "gpio": 25, "active_high": true },
+      "led": { "kind": "mcp23017", "address": "0x20", "channel": 3, "active_high": true },
+      "thresholds": {
+        "temperature_on_c": 30,
+        "temperature_off_c": 28,
+        "humidity_on_pct": 70,
+        "humidity_off_pct": 65
+      }
+    },
+    {
+      "zone_id": "",
+      "storage_unit_id": "",
+      "sensor_code": "",
+      "device_id": "",
+      "device_api_key": "",
+      "dht22": { "kind": "gpio", "gpio": 19 },
+      "mq2": { "kind": "esp32_adc", "gpio": 32 },
+      "fan": { "kind": "gpio", "gpio": 26, "active_high": true },
+      "led": { "kind": "mcp23017", "address": "0x20", "channel": 4, "active_high": true },
+      "thresholds": {
+        "temperature_on_c": 30,
+        "temperature_off_c": 28,
+        "humidity_on_pct": 70,
+        "humidity_off_pct": 65
+      }
+    }
+  ]
+}

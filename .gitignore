@@ -1,0 +1,110 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# next.js / build outputs
+.next/
+out/
+dist/
+build/
+coverage/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# local caches / generated files
+.cache/
+.parcel-cache/
+.turbo/
+*.tmp
+*.temp
+*.log
+*.pid
+*.stackdump
+*.dmp
+*.crash
+
+# env and secrets
+.env
+.env.*
+!.env.example
+.env.local
+.env.local.*
+*.local
+*.local.*
+**/.env
+**/.env.*
+**/*.env
+**/*.local
+**/*.local.*
+**/grainguard_secrets.h
+**/grainguard_secrets*.h
+**/zones.json
+**/*.secret
+**/*.secrets
+**/*.key
+**/*.pem
+**/*.crt
+**/*.cer
+**/*.p12
+**/*.pfx
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*.db-journal
+**/*.dump
+**/*.sql.gz
+**/*.bak
+**/*.backup
+**/*.log
+
+# firmware / Arduino build output
+*.bin
+*.elf
+*.hex
+*.uf2
+*.a
+*.o
+*.obj
+*.map
+*.out
+
+# IDE / OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+*.DS_Store
+Thumbs.db
+
+# temporary package manager output
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# project-specific generated data
+**/data/*.json
+**/config/*.json
+
+# safe examples must remain tracked
+!.env.example
+!**/grainguard_secrets.example.h
+!**/data/*.example.json
