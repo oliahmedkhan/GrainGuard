@@ -8,14 +8,28 @@ const MAX_OFFLINE_AFTER_SECONDS = 86_400;
 type SensorStatusRow = {
   id: string;
   sensor_code: string;
+  sensor_type: string;
   storage_unit_id: string;
   zone_id: string;
+  device_record_id: string;
+  esp32_device_id: string;
   status: string;
   last_seen_at: string | null;
 };
 
+type SensorDeviceRow = {
+  id: string;
+  physical_device_id: string;
+  device_name: string;
+  storage_unit_id: string;
+  status: string;
+};
+
 function jsonError(status: number, error: string) {
-  return NextResponse.json({ error }, { status });
+  return NextResponse.json(
+    { error },
+    { status, headers: { "Cache-Control": "no-store" } }
+  );
 }
 
 function getBearerToken(request: Request): string | null {
@@ -60,17 +74,27 @@ export async function GET(request: Request) {
   const { data: userData, error: userError } = await userClient.auth.getUser(accessToken);
   if (userError || !userData.user) return jsonError(401, "INVALID_USER_SESSION");
 
-  const { data, error } = await userClient
-    .from("sensors")
-    .select("id, sensor_code, storage_unit_id, zone_id, status, last_seen_at")
-    .order("zone_id", { ascending: true });
-  if (error) {
-    console.error("Sensor status lookup failed.", { code: error.code });
+  const [sensorResult, deviceResult] = await Promise.all([
+    userClient
+      .from("sensors")
+      .select(
+        "id, sensor_code, sensor_type, storage_unit_id, zone_id, device_record_id, esp32_device_id, status, last_seen_at"
+      )
+      .order("zone_id", { ascending: true }),
+    userClient
+      .from("sensor_devices")
+      .select("id, physical_device_id, device_name, storage_unit_id, status")
+      .order("device_name", { ascending: true }),
+  ]);
+  if (sensorResult.error || deviceResult.error) {
+    console.error("Sensor status lookup failed.", {
+      code: sensorResult.error?.code ?? deviceResult.error?.code,
+    });
     return jsonError(500, "SENSOR_STATUS_LOOKUP_FAILED");
   }
 
   const now = Date.now();
-  const rows = (data ?? []) as SensorStatusRow[];
+  const rows = (sensorResult.data ?? []) as SensorStatusRow[];
   const sensors = rows.map((sensor) => {
     const lastSeenMs = sensor.last_seen_at ? Date.parse(sensor.last_seen_at) : Number.NaN;
     const connectivity =
@@ -80,6 +104,28 @@ export async function GET(request: Request) {
           ? "ONLINE"
           : "OFFLINE";
     return { ...sensor, connectivity };
+  });
+
+  const deviceRows = (deviceResult.data ?? []) as SensorDeviceRow[];
+  const devices = deviceRows.map((device) => {
+    const childSensors = sensors.filter(
+      (sensor) => sensor.device_record_id === device.id
+    );
+    const activeSensors = childSensors.filter((sensor) => sensor.status === "active");
+    const onlineCount = activeSensors.filter(
+      (sensor) => sensor.connectivity === "ONLINE"
+    ).length;
+    const connectivity =
+      device.status !== "active"
+        ? device.status.toUpperCase()
+        : activeSensors.length === 0
+          ? "UNMONITORED"
+          : onlineCount === activeSensors.length
+            ? "ONLINE"
+            : onlineCount === 0
+              ? "OFFLINE"
+              : "DEGRADED";
+    return { ...device, connectivity, sensors: childSensors };
   });
 
   const zones = new Map<
@@ -114,8 +160,12 @@ export async function GET(request: Request) {
             : "DEGRADED";
   }
 
-  return NextResponse.json({
-    offline_after_seconds: offlineAfterSeconds,
-    zones: Array.from(zones.values()),
-  });
+  return NextResponse.json(
+    {
+      offline_after_seconds: offlineAfterSeconds,
+      devices,
+      zones: Array.from(zones.values()),
+    },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }

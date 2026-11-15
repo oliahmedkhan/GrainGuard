@@ -284,17 +284,20 @@ bool validZoneRegistration(const ZoneProvisioning& provisioning) {
          !isPlaceholder(apiKey.c_str());
 }
 
-bool hasDuplicateRegistration(size_t index) {
+bool hasConflictingRegistration(size_t index) {
   for (size_t other = 0; other < ZONE_COUNT; other++) {
     if (other == index) continue;
     if ((PROVISIONING[index].zoneId[0] != '\0' &&
          strcmp(PROVISIONING[index].zoneId, PROVISIONING[other].zoneId) == 0) ||
         (PROVISIONING[index].sensorCode[0] != '\0' &&
          strcmp(PROVISIONING[index].sensorCode, PROVISIONING[other].sensorCode) == 0) ||
-        (PROVISIONING[index].deviceId[0] != '\0' &&
-         strcmp(PROVISIONING[index].deviceId, PROVISIONING[other].deviceId) == 0) ||
         (PROVISIONING[index].apiKey[0] != '\0' &&
          strcmp(PROVISIONING[index].apiKey, PROVISIONING[other].apiKey) == 0)) {
+      return true;
+    }
+    if (PROVISIONING[index].deviceId[0] != '\0' &&
+        PROVISIONING[other].deviceId[0] != '\0' &&
+        strcmp(PROVISIONING[index].deviceId, PROVISIONING[other].deviceId) != 0) {
       return true;
     }
   }
@@ -359,7 +362,7 @@ bool loadConfiguration() {
     zone.config.led.gpio = hardware.ledGpio;
     zone.config.led.activeHigh = true;
     zone.config.registrationValid =
-        validZoneRegistration(registration) && !hasDuplicateRegistration(index);
+        validZoneRegistration(registration) && !hasConflictingRegistration(index);
     if (!zone.config.registrationValid) {
       Serial.printf("Zone %u registration missing or invalid; telemetry disabled for this zone.\n",
                     static_cast<unsigned>(index + 1));

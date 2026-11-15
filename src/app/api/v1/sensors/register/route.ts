@@ -1,11 +1,20 @@
 import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { createServiceSupabaseClient, createUserSupabaseClient } from "@/lib/supabase/server";
+import { parseSensorRegistrationInput } from "@/lib/supabase/sensor-registration";
 
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+type SensorDeviceRecord = {
+  id: string;
+  physical_device_id: string;
+  device_name: string;
+  storage_unit_id: string;
+};
 
 function jsonError(status: number, error: string) {
-  return NextResponse.json({ error }, { status });
+  return NextResponse.json(
+    { error },
+    { status, headers: { "Cache-Control": "no-store" } }
+  );
 }
 
 function bearerToken(request: Request): string | null {
@@ -13,6 +22,35 @@ function bearerToken(request: Request): string | null {
   if (!authorization?.startsWith("Bearer ")) return null;
   const token = authorization.slice(7).trim();
   return token.length > 32 && token.length < 4096 ? token : null;
+}
+
+async function removeEmptyParentDevice(
+  serviceClient: ReturnType<typeof createServiceSupabaseClient>,
+  deviceRecordId: string
+) {
+  const { count, error: sensorLookupError } = await serviceClient
+    .from("sensors")
+    .select("id", { count: "exact", head: true })
+    .eq("device_record_id", deviceRecordId);
+  if (sensorLookupError) {
+    console.error("Empty sensor device cleanup lookup failed.", {
+      code: sensorLookupError.code,
+    });
+    return;
+  }
+  if (count === null) {
+    console.error("Empty sensor device cleanup count was unavailable.");
+    return;
+  }
+  if (count !== 0) return;
+
+  const { error: deleteError } = await serviceClient
+    .from("sensor_devices")
+    .delete()
+    .eq("id", deviceRecordId);
+  if (deleteError) {
+    console.error("Empty sensor device cleanup failed.", { code: deleteError.code });
+  }
 }
 
 export async function POST(request: Request) {
@@ -42,35 +80,14 @@ export async function POST(request: Request) {
     return jsonError(400, "INVALID_JSON");
   }
 
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return jsonError(422, "INVALID_PAYLOAD");
-  }
-  const input = body as Record<string, unknown>;
-  const storageUnitId = input.storage_unit_id;
-  const zoneId = input.zone_id;
-  const sensorCode = input.sensor_code;
-  const deviceId = input.esp32_device_id;
-  const sensorType = input.sensor_type;
-  if (
-    typeof storageUnitId !== "string" ||
-    !uuidPattern.test(storageUnitId) ||
-    typeof zoneId !== "string" ||
-    !uuidPattern.test(zoneId) ||
-    typeof sensorCode !== "string" ||
-    !/^[A-Za-z0-9._-]{3,64}$/.test(sensorCode) ||
-    typeof deviceId !== "string" ||
-    !/^[A-Za-z0-9._-]{3,100}$/.test(deviceId) ||
-    typeof sensorType !== "string" ||
-    !/^[A-Za-z0-9._-]{2,64}$/.test(sensorType)
-  ) {
-    return jsonError(422, "INVALID_PAYLOAD");
-  }
+  const registration = parseSensorRegistrationInput(body);
+  if (!registration) return jsonError(422, "INVALID_PAYLOAD");
 
   const serviceClient = createServiceSupabaseClient();
   const { data: unit, error: unitError } = await serviceClient
     .from("storage_units")
     .select("id")
-    .eq("id", storageUnitId)
+    .eq("id", registration.storageUnitId)
     .eq("user_id", userData.user.id)
     .maybeSingle();
   if (unitError) {
@@ -82,8 +99,8 @@ export async function POST(request: Request) {
   const { data: zone, error: zoneError } = await serviceClient
     .from("storage_zones")
     .select("id")
-    .eq("id", zoneId)
-    .eq("storage_unit_id", storageUnitId)
+    .eq("id", registration.zoneId)
+    .eq("storage_unit_id", registration.storageUnitId)
     .maybeSingle();
   if (zoneError) {
     console.error("Sensor registration zone lookup failed.", { code: zoneError.code });
@@ -91,27 +108,81 @@ export async function POST(request: Request) {
   }
   if (!zone) return jsonError(404, "STORAGE_ZONE_NOT_FOUND");
 
+  let device: SensorDeviceRecord | null = null;
+  let createdDevice = false;
+  const { data: existingDevice, error: deviceLookupError } = await serviceClient
+    .from("sensor_devices")
+    .select("id, physical_device_id, device_name, storage_unit_id")
+    .eq("user_id", userData.user.id)
+    .eq("storage_unit_id", registration.storageUnitId)
+    .eq("physical_device_id", registration.deviceId)
+    .maybeSingle();
+  if (deviceLookupError) {
+    console.error("Sensor device lookup failed.", { code: deviceLookupError.code });
+    return jsonError(500, "SENSOR_REGISTRATION_FAILED");
+  }
+
+  device = existingDevice;
+  if (!device) {
+    const { data: insertedDevice, error: deviceInsertError } = await serviceClient
+      .from("sensor_devices")
+      .insert({
+        user_id: userData.user.id,
+        storage_unit_id: registration.storageUnitId,
+        physical_device_id: registration.deviceId,
+        device_name: registration.deviceName,
+        status: "active",
+      })
+      .select("id, physical_device_id, device_name, storage_unit_id")
+      .single();
+
+    if (deviceInsertError?.code === "23505") {
+      const { data: racedDevice, error: racedLookupError } = await serviceClient
+        .from("sensor_devices")
+        .select("id, physical_device_id, device_name, storage_unit_id")
+        .eq("user_id", userData.user.id)
+        .eq("storage_unit_id", registration.storageUnitId)
+        .eq("physical_device_id", registration.deviceId)
+        .maybeSingle();
+      if (racedLookupError || !racedDevice) {
+        console.error("Concurrent sensor device lookup failed.", {
+          code: racedLookupError?.code ?? deviceInsertError.code,
+        });
+        return jsonError(500, "SENSOR_REGISTRATION_FAILED");
+      }
+      device = racedDevice;
+    } else if (deviceInsertError || !insertedDevice) {
+      console.error("Sensor device registration failed.", {
+        code: deviceInsertError?.code ?? "NO_DEVICE_RETURNED",
+      });
+      return jsonError(500, "SENSOR_REGISTRATION_FAILED");
+    } else {
+      device = insertedDevice;
+      createdDevice = true;
+    }
+  }
+  if (!device) return jsonError(500, "SENSOR_REGISTRATION_FAILED");
+
   const secret = randomBytes(32).toString("base64url");
   const apiKeyHash = createHash("sha256").update(secret, "utf8").digest("hex");
   const { data: sensor, error: sensorError } = await serviceClient
     .from("sensors")
     .insert({
-      sensor_code: sensorCode,
-      storage_unit_id: storageUnitId,
-      zone_id: zoneId,
-      sensor_type: sensorType,
-      device_name: typeof input.device_name === "string" ? input.device_name.slice(0, 100) : null,
-      esp32_device_id: deviceId,
-      installation_location:
-        typeof input.installation_location === "string"
-          ? input.installation_location.slice(0, 200)
-          : null,
+      sensor_code: registration.sensorCode,
+      storage_unit_id: registration.storageUnitId,
+      zone_id: registration.zoneId,
+      sensor_type: registration.sensorType,
+      device_name: registration.deviceName,
+      esp32_device_id: registration.deviceId,
+      device_record_id: device.id,
+      installation_location: registration.installationLocation,
       status: "pending",
     })
-    .select("id, sensor_code, storage_unit_id, zone_id, esp32_device_id")
+    .select("id, sensor_code, storage_unit_id, zone_id, esp32_device_id, device_record_id")
     .single();
   if (sensorError) {
     console.error("Sensor registration insert failed.", { code: sensorError.code });
+    if (createdDevice) await removeEmptyParentDevice(serviceClient, device.id);
     return jsonError(sensorError.code === "23505" ? 409 : 500, "SENSOR_REGISTRATION_FAILED");
   }
 
@@ -127,6 +198,7 @@ export async function POST(request: Request) {
     if (cleanupError) {
       console.error("Incomplete sensor registration cleanup failed.", { code: cleanupError.code });
     }
+    if (createdDevice) await removeEmptyParentDevice(serviceClient, device.id);
     return jsonError(500, "SENSOR_REGISTRATION_FAILED");
   }
 
@@ -143,15 +215,22 @@ export async function POST(request: Request) {
     if (cleanupError) {
       console.error("Incomplete sensor registration cleanup failed.", { code: cleanupError.code });
     }
+    if (createdDevice) await removeEmptyParentDevice(serviceClient, device.id);
     return jsonError(500, "SENSOR_REGISTRATION_FAILED");
   }
 
   return NextResponse.json(
     {
       sensor: { ...sensor, status: "active" },
+      device: {
+        id: device.id,
+        physical_device_id: device.physical_device_id,
+        device_name: device.device_name,
+        storage_unit_id: device.storage_unit_id,
+      },
       device_api_key: secret,
       warning: "Store the device key securely; it is returned only once.",
     },
-    { status: 201 }
+    { status: 201, headers: { "Cache-Control": "no-store" } }
   );
 }

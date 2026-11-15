@@ -387,3 +387,90 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .context-crop { grid-column: auto; }
   .topbar-actions { gap: 3px; }
 }
+
+.device-management { display: grid; gap: 14px; }
+.device-registration-panel { padding: 17px; }
+.device-panel-heading { align-items: center; margin-bottom: 13px; }
+.device-panel-heading h3, .device-list-heading h3 { margin: 0 0 5px; color: #e4ebf0; font-size: 13px; font-weight: 620; }
+.database-verification { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 14px; padding: 9px 10px; border: 1px solid rgba(66,212,154,.16); border-radius: 7px; color: #93cdb3; background: rgba(57,192,139,.06); font-size: 9px; line-height: 1.5; }
+.database-verification svg { flex: 0 0 auto; color: #53d7a1; }
+.device-feedback { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0; padding: 9px 10px; border: 1px solid; border-radius: 7px; font-size: 10px; line-height: 1.5; }
+.device-feedback svg { flex: 0 0 auto; margin-top: 1px; }
+.device-feedback.error { border-color: rgba(242,123,120,.25); color: #f2aaa7; background: rgba(111,38,38,.16); }
+.device-feedback.success { border-color: rgba(66,212,154,.2); color: #91d6b7; background: rgba(57,192,139,.07); }
+.device-registration-form { display: grid; gap: 13px; }
+.device-registration-form .form-field { display: grid; min-width: 0; gap: 6px; color: #a7b3bd; font-size: 10px; }
+.device-registration-form .form-field input, .device-registration-form .form-field select { width: 100%; min-width: 0; height: 34px; padding: 0 9px; border: 1px solid #293744; border-radius: 6px; color: #dce5eb; background: #101923; font-size: 10px; }
+.device-registration-form .form-field small { color: #748696; font-size: 9px; line-height: 1.45; }
+.device-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.device-zone-form-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.device-zone-form-heading > div { display: grid; gap: 4px; }
+.device-zone-form-heading strong { color: #d9e3e9; font-size: 10px; font-weight: 620; }
+.device-zone-form-heading span { color: #788998; font-size: 9px; }
+.device-zone-form-heading .registration-limit { padding: 5px 7px; border: 1px solid var(--border); border-radius: 5px; color: #8798a6; white-space: nowrap; }
+.device-zone-form-list { display: grid; gap: 9px; }
+.device-zone-form-row { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 10px; min-width: 0; margin: 0; padding: 11px; border: 1px solid var(--border-soft); border-radius: 8px; }
+.device-zone-form-row legend { padding: 0 5px; color: #8da0af; font-size: 9px; font-weight: 650; }
+.device-submit-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.device-submit-row > span { color: #7d8f9e; font-size: 9px; line-height: 1.5; }
+.device-empty { display: flex; min-height: 130px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 20px; border: 1px dashed #2b3a47; border-radius: 9px; color: #778897; text-align: center; }
+.device-empty > svg { color: #71be9d; }
+.device-empty strong { color: #cbd6de; font-size: 11px; font-weight: 620; }
+.device-empty span { max-width: 600px; color: #81919f; font-size: 9px; line-height: 1.55; }
+.device-empty.compact { min-height: 80px; padding: 13px; }
+.issued-credentials { padding: 15px; border-color: rgba(234,185,106,.24); }
+.issued-credentials-warning { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 12px; color: #eab96a; }
+.issued-credentials-warning svg { flex: 0 0 auto; margin-top: 1px; }
+.issued-credentials-warning > div { display: grid; gap: 4px; }
+.issued-credentials-warning strong { color: #e9c78e; font-size: 11px; }
+.issued-credentials-warning span { color: #a89778; font-size: 9px; line-height: 1.5; }
+.issued-credential-row { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(150px, 1.4fr) auto auto; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid var(--border-soft); }
+.issued-credential-label { display: grid; min-width: 0; gap: 4px; }
+.issued-credential-label strong { overflow: hidden; color: #dfe7ed; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.issued-credential-label span { overflow: hidden; color: #8494a2; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.issued-credential-row input { width: 100%; min-width: 0; height: 30px; padding: 0 8px; border: 1px solid #354454; border-radius: 6px; color: #dce5eb; background: #0e151d; font-family: monospace; font-size: 9px; }
+.firmware-instructions { display: grid; gap: 5px; margin-top: 12px; padding: 10px; border: 1px solid rgba(66,212,154,.15); border-radius: 7px; background: rgba(57,192,139,.045); }
+.firmware-instructions strong { color: #8bd1b0; font-size: 10px; }
+.firmware-instructions span { color: #8c9da9; font-size: 9px; line-height: 1.6; }
+.firmware-instructions code { color: #b7d8c8; font-family: monospace; }
+.device-list-section { display: grid; gap: 10px; }
+.device-list-heading { align-items: center; }
+.registered-device-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.registered-device-card { padding: 14px; }
+.registered-device-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.registered-device-icon { display: grid; width: 31px; height: 31px; flex: 0 0 auto; place-items: center; border-radius: 8px; color: #65d9a8; background: rgba(57,192,139,.11); }
+.registered-device-title { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.registered-device-title strong { overflow: hidden; color: #e2eaf0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.registered-device-title span { overflow: hidden; color: #80909e; font-family: monospace; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.device-connectivity, .sensor-registration-status { flex: 0 0 auto; padding: 4px 6px; border-radius: 5px; color: #91a0ad; background: rgba(125,143,158,.1); font-size: 8px; font-weight: 650; text-transform: uppercase; }
+.device-connectivity.online, .sensor-registration-status.active { color: #72d6aa; background: rgba(57,192,139,.1); }
+.device-connectivity.degraded { color: #e8c07c; background: rgba(193,140,62,.12); }
+.device-connectivity.offline, .sensor-registration-status.inactive, .sensor-registration-status.maintenance { color: #ed9995; background: rgba(193,73,73,.11); }
+.registered-device-meta { display: flex; justify-content: space-between; gap: 10px; margin: 12px 0 8px; padding-bottom: 9px; border-bottom: 1px solid var(--border-soft); font-size: 9px; }
+.registered-device-meta span { color: #7c8d9b; }
+.registered-device-meta strong { overflow: hidden; color: #bfcbd4; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.registered-sensor-list { display: grid; gap: 8px; }
+.registered-sensor-row { padding: 10px; border: 1px solid var(--border-soft); border-radius: 7px; background: rgba(12,18,25,.35); }
+.registered-sensor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.registered-sensor-heading > div { display: grid; min-width: 0; gap: 4px; }
+.registered-sensor-heading strong { color: #d9e3e9; font-size: 10px; }
+.registered-sensor-heading span { overflow: hidden; color: #7f909e; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.registered-sensor-details { display: grid; gap: 4px; margin-top: 8px; color: #8797a4; font-size: 8px; line-height: 1.5; }
+
+@media (max-width: 900px) {
+  .registered-device-grid { grid-template-columns: 1fr; }
+  .device-zone-form-row { grid-template-columns: 1fr 1fr; }
+  .device-zone-form-row .form-field:first-of-type { grid-column: 1 / -1; }
+}
+@media (max-width: 680px) {
+  .device-registration-panel { padding: 13px; }
+  .device-panel-heading, .device-list-heading { align-items: flex-start; }
+  .device-panel-heading .button { min-height: 30px; }
+  .device-form-grid { grid-template-columns: 1fr; }
+  .device-zone-form-row { grid-template-columns: 1fr; }
+  .device-zone-form-row .form-field:first-of-type { grid-column: auto; }
+  .device-submit-row { align-items: flex-start; flex-direction: column; }
+  .device-submit-row .button { width: 100%; }
+  .issued-credential-row { grid-template-columns: 1fr auto auto; }
+  .issued-credential-label { grid-column: 1 / -1; }
+}

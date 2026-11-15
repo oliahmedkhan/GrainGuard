@@ -54,7 +54,31 @@ test("firmware has no runtime filesystem dependency and validates local registra
   assert.match(firmware, /#include "grainguard_config\.example\.h"/);
   assert.doesNotMatch(firmware, /LittleFS|zones\.json/);
   assert.match(firmware, /validZoneRegistration/);
+  assert.match(firmware, /hasConflictingRegistration/);
   assert.match(firmware, /GRAINGUARD_SENSOR_FAULT_HOLD_MS/);
+});
+
+test("three zone registrations share one physical device identity", () => {
+  const conflictCheck = firmware.match(
+    /bool hasConflictingRegistration\(size_t index\) \{([\s\S]*?)\n\}/
+  );
+  assert.ok(conflictCheck, "registration conflict validation must exist");
+  assert.match(
+    conflictCheck[1],
+    /strcmp\(PROVISIONING\[index\]\.deviceId,\s*PROVISIONING\[other\]\.deviceId\) != 0/
+  );
+  assert.match(
+    conflictCheck[1],
+    /strcmp\(PROVISIONING\[index\]\.sensorCode,\s*PROVISIONING\[other\]\.sensorCode\) == 0/
+  );
+  assert.match(
+    conflictCheck[1],
+    /strcmp\(PROVISIONING\[index\]\.apiKey,\s*PROVISIONING\[other\]\.apiKey\) == 0/
+  );
+  assert.doesNotMatch(
+    conflictCheck[1],
+    /strcmp\(PROVISIONING\[index\]\.deviceId,\s*PROVISIONING\[other\]\.deviceId\) == 0/
+  );
 });
 
 test("configuration templates contain only blank identities and safe placeholders", () => {

@@ -36,6 +36,7 @@ import {
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { FormEvent, ReactNode } from "react";
 import AccountPanel from "@/app/components/account-panel";
+import DeviceManagementPanel from "@/app/components/device-management-panel";
 import { useLiveSensorReadings } from "@/lib/use-live-sensor-readings";
 import type { LiveSensorReading } from "@/lib/use-live-sensor-readings";
 import { syncLocalWorkspaceToDatabase } from "@/lib/sync-local-workspace";
@@ -668,7 +669,8 @@ export default function Home() {
           {section === "Storage Zones" && <ZoneView facilities={visibleFacilities} demoMode={demoMode} onAdd={() => setModal("zone")} onSelect={(facilityId, zoneId) => { chooseFacility(facilityId); setSelectedZoneId(zoneId); activateSection("Overview"); }} onDelete={deleteZone} />}
           {section === "Crop Batches" && <BatchView facilities={visibleFacilities} demoMode={demoMode} />}
           {section === "Live Monitoring" && <MonitoringView reading={reading} history={sensorData.readings} crop={crop} demoMode={demoMode} />}
-          {section !== "Overview" && !isContextPage && !["Storage Facilities", "Storage Zones", "Crop Batches"].includes(section) && (
+          {section === "Devices & Sensors" && <DeviceManagementPanel />}
+          {section !== "Overview" && !isContextPage && !["Storage Facilities", "Storage Zones", "Crop Batches", "Devices & Sensors"].includes(section) && (
             <ModuleView section={section} demoMode={demoMode} history={sensorData.readings} />
           )}
         </div>
@@ -769,7 +771,6 @@ function ModuleView({ section, demoMode, history }: { section: Section; demoMode
     Recommendations: { icon: Leaf, title: "No verified recommendations available", description: "Crop-specific actions are not displayed without verified evidence and sufficient context.", status: "INSUFFICIENT EVIDENCE", details: ["No scientific thresholds are configured.", "No chemical or pathogen-specific treatments are suggested.", "Knowledge base references have not yet been added."] },
     "Historical Data": { icon: History, title: "Sensor history", description: "Browse the latest authorized sensor observations; older-range exports are not connected yet.", status: "BOUNDED LIVE QUERY", details: ["Charts use actual database readings when available.", "The dashboard limits loaded history to 48 records.", "Demo readings are never stored as sensor observations."] },
     Reports: { icon: FileChartColumn, title: "Reports are not available yet", description: "No reports are generated from missing or simulated-only measurements.", status: "NOT CONFIGURED", details: ["Facility and zone metadata can be exported in a later phase.", "Energy reports require actual power measurements.", "Any future demo report will be clearly marked simulated."] },
-    "Devices & Sensors": { icon: Cpu, title: "Sensor registration API", description: "Register devices against an owned storage zone, then submit readings with the device-specific credential.", status: "API AVAILABLE", details: ["Use POST /api/v1/sensors/register with a signed-in user token.", "A new device key is returned once and stored only as a hash.", "No physical ESP32 or confirmed board pin map was present in the project."] },
     "Knowledge Base": { icon: BookOpen, title: "Research library not configured", description: "No crop thresholds or research references have been added yet.", status: "NO VERIFIED SOURCES", details: ["No storage range is assumed to apply to every crop.", "Verified sources will include scope and limitations.", "Unavailable information will remain explicitly unknown."] },
     Settings: { icon: Settings, title: "Workspace settings", description: "Facility setup remains browser-local; Supabase account access is available for authorized sensor data.", status: demoMode ? "DEMO ENABLED" : "LOCAL + DATABASE", details: ["Browser-local facility metadata is not synced to the database yet.", "Sensor readings are visible only to an authenticated owner under row-level security.", "Demo mode can be turned off from the top bar."] },
   };
