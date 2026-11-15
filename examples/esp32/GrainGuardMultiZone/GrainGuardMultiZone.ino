@@ -1,77 +1,89 @@
-#include <Adafruit_ADS1X15.h>
-#include <Adafruit_MCP23X17.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
 #include <HTTPClient.h>
-#include <LittleFS.h>
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <Wire.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
 
-#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <set>
-#include <string>
 #include <vector>
 
+#include <esp_system.h>
+
+#if __has_include("grainguard_secrets.h")
 #include "grainguard_secrets.h"
-
-#ifndef GRAINGUARD_WIFI_SSID
-#error "Define GRAINGUARD_WIFI_SSID in grainguard_secrets.h."
+#else
+#include "grainguard_secrets.example.h"
+#define GRAINGUARD_USING_EXAMPLE_SECRETS 1
 #endif
 
-#ifndef GRAINGUARD_WIFI_PASSWORD
-#error "Define GRAINGUARD_WIFI_PASSWORD in grainguard_secrets.h."
-#endif
-
-#ifndef GRAINGUARD_API_BASE_URL
-#error "Define GRAINGUARD_API_BASE_URL in grainguard_secrets.h."
-#endif
-
-#ifndef ROOT_CA_CERT
-#error "Define ROOT_CA_CERT with the trusted TLS CA certificate."
+#if __has_include("grainguard_config.h")
+#include "grainguard_config.h"
+#else
+#include "grainguard_config.example.h"
+#define GRAINGUARD_USING_EXAMPLE_CONFIG 1
 #endif
 
 namespace {
 
-constexpr char CONFIG_PATH[] = "/zones.json";
-constexpr size_t CONFIG_MAX_BYTES = 32 * 1024;
+constexpr size_t ZONE_COUNT = 3;
 constexpr size_t HTTP_BODY_CAPACITY = 768;
-constexpr uint8_t MAX_ADS1115_ADDRESSES = 4;
-constexpr uint8_t MAX_MCP23017_ADDRESSES = 8;
 constexpr uint32_t DEFAULT_SAMPLE_INTERVAL_MS = 60000;
 constexpr uint32_t DEFAULT_MIN_FAN_ON_MS = 60000;
 constexpr uint32_t DEFAULT_MIN_FAN_OFF_MS = 60000;
 constexpr uint32_t DEFAULT_FAULT_HOLD_MS = 120000;
 constexpr uint32_t DHT_MIN_SAMPLE_INTERVAL_MS = 2000;
-constexpr uint8_t DEFAULT_I2C_SDA_GPIO = 13;
-constexpr uint8_t DEFAULT_I2C_SCL_GPIO = 14;
-enum class AnalogKind : uint8_t { Esp32Adc, Ads1115 };
-enum class OutputKind : uint8_t { Gpio, Mcp23017 };
+constexpr uint8_t MAX_RETRY_ATTEMPTS = 5;
 
 struct AnalogChannel {
-  AnalogKind kind = AnalogKind::Esp32Adc;
   uint8_t gpio = 0;
-  uint8_t address = 0;
-  uint8_t channel = 0;
 };
 
 struct OutputChannel {
-  OutputKind kind = OutputKind::Gpio;
   uint8_t gpio = 0;
-  uint8_t address = 0;
-  uint8_t channel = 0;
   bool activeHigh = true;
+};
+
+struct ZoneProvisioning {
+  const char* zoneId;
+  const char* storageUnitId;
+  const char* sensorCode;
+  const char* deviceId;
+  const char* apiKey;
+};
+
+struct ZoneHardware {
+  uint8_t dhtGpio;
+  uint8_t mq2Gpio;
+  uint8_t fanGpio;
+  uint8_t ledGpio;
+};
+
+constexpr ZoneProvisioning PROVISIONING[ZONE_COUNT] = {
+    {GRAINGUARD_ZONE_1_ZONE_ID, GRAINGUARD_ZONE_1_STORAGE_UNIT_ID,
+     GRAINGUARD_ZONE_1_SENSOR_CODE, GRAINGUARD_ZONE_1_DEVICE_ID,
+     GRAINGUARD_ZONE_1_DEVICE_API_KEY},
+    {GRAINGUARD_ZONE_2_ZONE_ID, GRAINGUARD_ZONE_2_STORAGE_UNIT_ID,
+     GRAINGUARD_ZONE_2_SENSOR_CODE, GRAINGUARD_ZONE_2_DEVICE_ID,
+     GRAINGUARD_ZONE_2_DEVICE_API_KEY},
+    {GRAINGUARD_ZONE_3_ZONE_ID, GRAINGUARD_ZONE_3_STORAGE_UNIT_ID,
+     GRAINGUARD_ZONE_3_SENSOR_CODE, GRAINGUARD_ZONE_3_DEVICE_ID,
+     GRAINGUARD_ZONE_3_DEVICE_API_KEY},
+};
+
+constexpr ZoneHardware HARDWARE[ZONE_COUNT] = {
+    {4, 34, 18, 25},
+    {16, 35, 19, 26},
+    {17, 32, 21, 27},
 };
 
 class Dht22SensorAdapter {
@@ -111,6 +123,7 @@ struct ZoneConfig {
   float temperatureOffC = 28.0f;
   float humidityOnPercent = 70.0f;
   float humidityOffPercent = 65.0f;
+  bool registrationValid = false;
 };
 
 struct ZoneRuntime {
@@ -142,25 +155,18 @@ struct PendingRequest {
   size_t zoneIndex = 0;
   char path[32] = {};
   char body[HTTP_BODY_CAPACITY] = {};
+  uint8_t attempts = 0;
+  uint32_t nextAttemptAt = 0;
 };
 
 std::vector<ZoneRuntime> zones;
-std::array<Adafruit_ADS1115, MAX_ADS1115_ADDRESSES> adsDevices;
-std::array<Adafruit_MCP23X17, MAX_MCP23017_ADDRESSES> mcpDevices;
-std::array<bool, MAX_ADS1115_ADDRESSES> adsReady = {};
-std::array<bool, MAX_MCP23017_ADDRESSES> mcpReady = {};
-Dht22SensorAdapter outsideAirDht;
 QueueHandle_t readingsQueue = nullptr;
 QueueHandle_t faultQueue = nullptr;
 Preferences stateStore;
 bool configurationValid = false;
 bool hardwareConfirmed = false;
-bool hasExpansionHardware = false;
-bool hasOutsideAirDht = false;
-bool outsideAirSampled = false;
-uint8_t outsideAirGpio = 0;
-uint8_t i2cSdaGpio = DEFAULT_I2C_SDA_GPIO;
-uint8_t i2cSclGpio = DEFAULT_I2C_SCL_GPIO;
+bool networkConfigurationValid = false;
+bool wifiWasConnected = false;
 uint32_t sampleIntervalMs = DEFAULT_SAMPLE_INTERVAL_MS;
 uint32_t minFanOnMs = DEFAULT_MIN_FAN_ON_MS;
 uint32_t minFanOffMs = DEFAULT_MIN_FAN_OFF_MS;
@@ -168,9 +174,7 @@ uint32_t faultHoldMs = DEFAULT_FAULT_HOLD_MS;
 uint32_t nextSampleAt = 0;
 uint32_t nextWifiAttemptAt = 0;
 uint32_t messageCounter = 0;
-uint32_t lastOutsideReadAt = 0;
-float outsideHumidityPercent = NAN;
-bool outsideHumidityValid = false;
+uint32_t bootMessageId = 0;
 String serialCommand;
 
 bool isOutputGpio(int gpio) {
@@ -210,34 +214,6 @@ bool isAdc1Gpio(int gpio) {
   }
 }
 
-bool isDhtGpio(int gpio) {
-  return isOutputGpio(gpio);
-}
-
-bool parseText(JsonVariantConst value, String& output, size_t maxLength) {
-  if (!value.is<const char*>()) return false;
-  const char* text = value.as<const char*>();
-  if (text == nullptr) return false;
-  output = text;
-  return output.length() > 0 && output.length() <= maxLength;
-}
-
-bool parseInteger(JsonVariantConst value, int minimum, int maximum, int& output) {
-  if (!value.is<int>()) return false;
-  const int parsed = value.as<int>();
-  if (parsed < minimum || parsed > maximum) return false;
-  output = parsed;
-  return true;
-}
-
-bool parseNumber(JsonVariantConst value, float minimum, float maximum, float& output) {
-  if (!value.is<float>() && !value.is<double>() && !value.is<int>()) return false;
-  const double parsed = value.as<double>();
-  if (!std::isfinite(parsed) || parsed < minimum || parsed > maximum) return false;
-  output = static_cast<float>(parsed);
-  return true;
-}
-
 bool isUuid(const String& value) {
   if (value.length() != 36) return false;
   for (size_t index = 0; index < value.length(); index++) {
@@ -268,136 +244,6 @@ bool claimGpio(std::set<int>& usedGpios, int gpio, bool output) {
   return usedGpios.insert(gpio).second;
 }
 
-bool parseI2cAddress(JsonVariantConst value, uint8_t minimum, uint8_t maximum, uint8_t& address) {
-  String text;
-  if (!parseText(value, text, 4) || !text.startsWith("0x")) return false;
-  char* end = nullptr;
-  const long parsed = strtol(text.c_str() + 2, &end, 16);
-  if (end == text.c_str() + 2 || *end != '\0' || parsed < minimum || parsed > maximum) {
-    return false;
-  }
-  address = static_cast<uint8_t>(parsed);
-  return true;
-}
-
-bool parseOutputChannel(
-    JsonObjectConst object,
-    OutputChannel& output,
-    std::set<int>& usedGpios,
-    std::set<int>& usedMcpChannels) {
-  String kind;
-  if (!parseText(object["kind"], kind, 16)) return false;
-  if (!object["active_high"].is<bool>()) return false;
-  output.activeHigh = object["active_high"].as<bool>();
-
-  if (kind == "gpio") {
-    int gpio = -1;
-    if (!parseInteger(object["gpio"], 0, 39, gpio) || !claimGpio(usedGpios, gpio, true)) {
-      return false;
-    }
-    output.kind = OutputKind::Gpio;
-    output.gpio = static_cast<uint8_t>(gpio);
-    return true;
-  }
-  if (kind == "mcp23017") {
-    uint8_t address = 0;
-    int channel = -1;
-    if (!parseI2cAddress(object["address"], 0x20, 0x27, address) ||
-        !parseInteger(object["channel"], 0, 15, channel)) {
-      return false;
-    }
-    const int key = (static_cast<int>(address) << 8) | channel;
-    if (!usedMcpChannels.insert(key).second) return false;
-    output.kind = OutputKind::Mcp23017;
-    output.address = address;
-    output.channel = static_cast<uint8_t>(channel);
-    hasExpansionHardware = true;
-    return true;
-  }
-  return false;
-}
-
-bool parseAnalogChannel(
-    JsonObjectConst object,
-    AnalogChannel& output,
-    std::set<int>& usedGpios,
-    std::set<int>& usedAdsChannels) {
-  String kind;
-  if (!parseText(object["kind"], kind, 16)) return false;
-  if (kind == "esp32_adc") {
-    int gpio = -1;
-    if (!parseInteger(object["gpio"], 0, 39, gpio) || !claimGpio(usedGpios, gpio, false)) {
-      return false;
-    }
-    output.kind = AnalogKind::Esp32Adc;
-    output.gpio = static_cast<uint8_t>(gpio);
-    return true;
-  }
-  if (kind == "ads1115") {
-    uint8_t address = 0;
-    int channel = -1;
-    if (!parseI2cAddress(object["address"], 0x48, 0x4B, address) ||
-        !parseInteger(object["channel"], 0, 3, channel)) {
-      return false;
-    }
-    const int key = (static_cast<int>(address) << 8) | channel;
-    if (!usedAdsChannels.insert(key).second) return false;
-    output.kind = AnalogKind::Ads1115;
-    output.address = address;
-    output.channel = static_cast<uint8_t>(channel);
-    hasExpansionHardware = true;
-    return true;
-  }
-  return false;
-}
-
-bool parseZone(
-    JsonObjectConst object,
-    ZoneConfig& zone,
-    std::set<int>& usedGpios,
-    std::set<int>& usedAdsChannels,
-    std::set<int>& usedMcpChannels) {
-  if (!parseText(object["zone_id"], zone.zoneId, 36) || !isUuid(zone.zoneId) ||
-      !parseText(object["storage_unit_id"], zone.storageUnitId, 36) ||
-      !isUuid(zone.storageUnitId) ||
-      !parseText(object["sensor_code"], zone.sensorCode, 64) ||
-      !isCode(zone.sensorCode, 3, 64) ||
-      !parseText(object["device_id"], zone.deviceId, 100) ||
-      !isCode(zone.deviceId, 3, 100) ||
-      !parseText(object["device_api_key"], zone.apiKey, 128) ||
-      zone.apiKey.length() < 32) {
-    return false;
-  }
-
-  String dhtKind;
-  int dhtGpio = -1;
-  if (!parseText(object["dht22"]["kind"], dhtKind, 16) ||
-      dhtKind != "gpio" ||
-      !parseInteger(object["dht22"]["gpio"], 0, 39, dhtGpio) ||
-      !isDhtGpio(dhtGpio) ||
-      !usedGpios.insert(dhtGpio).second) {
-    return false;
-  }
-  zone.dhtGpio = static_cast<uint8_t>(dhtGpio);
-
-  if (!parseAnalogChannel(object["mq2"].as<JsonObjectConst>(), zone.mq2, usedGpios, usedAdsChannels) ||
-      !parseOutputChannel(object["fan"].as<JsonObjectConst>(), zone.fan, usedGpios, usedMcpChannels) ||
-      !parseOutputChannel(object["led"].as<JsonObjectConst>(), zone.led, usedGpios, usedMcpChannels)) {
-    return false;
-  }
-
-  JsonObjectConst thresholds = object["thresholds"].as<JsonObjectConst>();
-  if (!parseNumber(thresholds["temperature_on_c"], -40.0f, 80.0f, zone.temperatureOnC) ||
-      !parseNumber(thresholds["temperature_off_c"], -40.0f, 80.0f, zone.temperatureOffC) ||
-      zone.temperatureOffC >= zone.temperatureOnC ||
-      !parseNumber(thresholds["humidity_on_pct"], 0.0f, 100.0f, zone.humidityOnPercent) ||
-      !parseNumber(thresholds["humidity_off_pct"], 0.0f, 100.0f, zone.humidityOffPercent) ||
-      zone.humidityOffPercent >= zone.humidityOnPercent) {
-    return false;
-  }
-  return true;
-}
-
 uint32_t zoneHash(const String& zoneId) {
   uint32_t hash = 2166136261UL;
   for (size_t index = 0; index < zoneId.length(); index++) {
@@ -407,168 +253,142 @@ uint32_t zoneHash(const String& zoneId) {
   return hash;
 }
 
-void makeStateKeys(ZoneRuntime& zone) {
-  const uint32_t hash = zoneHash(zone.config.zoneId);
+void makeStateKeys(ZoneRuntime& zone, size_t index) {
+  const uint32_t hash = isUuid(zone.config.zoneId)
+                            ? zoneHash(zone.config.zoneId)
+                            : static_cast<uint32_t>(index + 1);
   snprintf(zone.fanStateKey, sizeof(zone.fanStateKey), "f%08lx", static_cast<unsigned long>(hash));
   snprintf(zone.faultStateKey, sizeof(zone.faultStateKey), "l%08lx", static_cast<unsigned long>(hash));
 }
 
+bool isPlaceholder(const char* value) {
+  if (value == nullptr || value[0] == '\0') return true;
+  return strstr(value, "your-") != nullptr ||
+         strstr(value, "REPLACE_WITH") != nullptr ||
+         strstr(value, ".example") != nullptr;
+}
+
+bool validZoneRegistration(const ZoneProvisioning& provisioning) {
+  const String zoneId = provisioning.zoneId == nullptr ? "" : provisioning.zoneId;
+  const String storageUnitId =
+      provisioning.storageUnitId == nullptr ? "" : provisioning.storageUnitId;
+  const String sensorCode = provisioning.sensorCode == nullptr ? "" : provisioning.sensorCode;
+  const String deviceId = provisioning.deviceId == nullptr ? "" : provisioning.deviceId;
+  const String apiKey = provisioning.apiKey == nullptr ? "" : provisioning.apiKey;
+  return isUuid(zoneId) &&
+         isUuid(storageUnitId) &&
+         isCode(sensorCode, 3, 64) &&
+         isCode(deviceId, 3, 100) &&
+         apiKey.length() >= 32 &&
+         apiKey.length() <= 128 &&
+         !isPlaceholder(apiKey.c_str());
+}
+
+bool hasDuplicateRegistration(size_t index) {
+  for (size_t other = 0; other < ZONE_COUNT; other++) {
+    if (other == index) continue;
+    if ((PROVISIONING[index].zoneId[0] != '\0' &&
+         strcmp(PROVISIONING[index].zoneId, PROVISIONING[other].zoneId) == 0) ||
+        (PROVISIONING[index].sensorCode[0] != '\0' &&
+         strcmp(PROVISIONING[index].sensorCode, PROVISIONING[other].sensorCode) == 0) ||
+        (PROVISIONING[index].deviceId[0] != '\0' &&
+         strcmp(PROVISIONING[index].deviceId, PROVISIONING[other].deviceId) == 0) ||
+        (PROVISIONING[index].apiKey[0] != '\0' &&
+         strcmp(PROVISIONING[index].apiKey, PROVISIONING[other].apiKey) == 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool networkSettingsReady() {
+  const char* url = GRAINGUARD_API_BASE_URL;
+  const char* ssid = GRAINGUARD_WIFI_SSID;
+  const char* password = GRAINGUARD_WIFI_PASSWORD;
+  const char* certificate = ROOT_CA_CERT;
+  return !isPlaceholder(url) &&
+         strncmp(url, "https://", 8) == 0 &&
+         url[strlen(url) - 1] != '/' &&
+         !isPlaceholder(ssid) &&
+         !isPlaceholder(password) &&
+         strstr(certificate, "-----BEGIN CERTIFICATE-----") != nullptr &&
+         strstr(certificate, "REPLACE_WITH") == nullptr;
+}
+
 bool loadConfiguration() {
-  File file = LittleFS.open(CONFIG_PATH, "r");
-  if (!file) {
-    Serial.println("Config missing: upload data/zones.json to LittleFS.");
+  hardwareConfirmed =
+      GRAINGUARD_HARDWARE_CONFIRMED && GRAINGUARD_FAN_POLARITY_CONFIRMED;
+  sampleIntervalMs = GRAINGUARD_SAMPLE_INTERVAL_MS;
+  minFanOnMs = GRAINGUARD_MIN_FAN_ON_MS;
+  minFanOffMs = GRAINGUARD_MIN_FAN_OFF_MS;
+  faultHoldMs = GRAINGUARD_SENSOR_FAULT_HOLD_MS;
+  if (sampleIntervalMs < DHT_MIN_SAMPLE_INTERVAL_MS ||
+      sampleIntervalMs > 3600000UL ||
+      minFanOnMs > 86400000UL ||
+      minFanOffMs > 86400000UL ||
+      faultHoldMs < 1000UL ||
+      faultHoldMs > 3600000UL) {
+    Serial.println("Invalid compile-time timing configuration.");
     return false;
-  }
-  if (file.size() == 0 || file.size() > CONFIG_MAX_BYTES) {
-    Serial.println("Config size is empty or exceeds the safe parser limit.");
-    file.close();
-    return false;
-  }
-
-  JsonDocument document;
-  const DeserializationError parseError = deserializeJson(document, file);
-  file.close();
-  if (parseError) {
-    Serial.printf("Config JSON parse failed: %s\n", parseError.c_str());
-    return false;
-  }
-
-  JsonObjectConst root = document.as<JsonObjectConst>();
-  if (!root["hardware_confirmed"].is<bool>()) return false;
-  hardwareConfirmed = root["hardware_confirmed"].as<bool>();
-
-  JsonObjectConst timing = root["timing"].as<JsonObjectConst>();
-  int parsed = 0;
-  if (parseInteger(timing["sample_interval_ms"], DHT_MIN_SAMPLE_INTERVAL_MS, 3600000, parsed)) {
-    sampleIntervalMs = static_cast<uint32_t>(parsed);
-  } else {
-    Serial.println("Invalid timing.sample_interval_ms.");
-    return false;
-  }
-  if (parseInteger(timing["min_fan_on_ms"], 0, 86400000, parsed)) {
-    minFanOnMs = static_cast<uint32_t>(parsed);
-  } else {
-    Serial.println("Invalid timing.min_fan_on_ms.");
-    return false;
-  }
-  if (parseInteger(timing["min_fan_off_ms"], 0, 86400000, parsed)) {
-    minFanOffMs = static_cast<uint32_t>(parsed);
-  } else {
-    Serial.println("Invalid timing.min_fan_off_ms.");
-    return false;
-  }
-  if (parseInteger(timing["sensor_fault_hold_ms"], 1000, 3600000, parsed)) {
-    faultHoldMs = static_cast<uint32_t>(parsed);
-  } else {
-    Serial.println("Invalid timing.sensor_fault_hold_ms.");
-    return false;
-  }
-
-  JsonObjectConst i2c = root["i2c"].as<JsonObjectConst>();
-  if (!i2c.isNull()) {
-    if (!parseInteger(i2c["sda_gpio"], 0, 39, parsed) || !isOutputGpio(parsed)) return false;
-    i2cSdaGpio = static_cast<uint8_t>(parsed);
-    if (!parseInteger(i2c["scl_gpio"], 0, 39, parsed) || !isOutputGpio(parsed)) return false;
-    i2cSclGpio = static_cast<uint8_t>(parsed);
-    if (i2cSdaGpio == i2cSclGpio) return false;
   }
 
   std::set<int> usedGpios;
-  std::set<int> usedAdsChannels;
-  std::set<int> usedMcpChannels;
-  std::set<std::string> zoneIds;
-  std::set<std::string> sensorCodes;
-  std::set<std::string> deviceIds;
-
-  JsonVariantConst outside = root["outside_air"];
-  if (!outside.isNull()) {
-    JsonObjectConst outsideObject = outside.as<JsonObjectConst>();
-    String kind;
-    int gpio = -1;
-    if (!parseText(outsideObject["kind"], kind, 16) ||
-        kind != "dht22_gpio" ||
-        !parseInteger(outsideObject["gpio"], 0, 39, gpio) ||
-        !claimGpio(usedGpios, gpio, true)) {
-      Serial.println("outside_air must use a unique direct DHT22 GPIO.");
+  zones.reserve(ZONE_COUNT);
+  for (size_t index = 0; index < ZONE_COUNT; index++) {
+    const ZoneHardware& hardware = HARDWARE[index];
+    if (!claimGpio(usedGpios, hardware.dhtGpio, true) ||
+        !claimGpio(usedGpios, hardware.mq2Gpio, false) ||
+        !claimGpio(usedGpios, hardware.fanGpio, true) ||
+        !claimGpio(usedGpios, hardware.ledGpio, true)) {
+      Serial.printf("Invalid or conflicting hardware mapping in zone %u.\n",
+                    static_cast<unsigned>(index + 1));
       return false;
     }
-    outsideAirGpio = static_cast<uint8_t>(gpio);
-    hasOutsideAirDht = true;
-  }
 
-  JsonArrayConst configuredZones = root["zones"].as<JsonArrayConst>();
-  if (configuredZones.isNull() || configuredZones.size() == 0) {
-    Serial.println("Config must contain at least one zone.");
-    return false;
-  }
-  zones.reserve(configuredZones.size());
-  for (JsonObjectConst zoneObject : configuredZones) {
     ZoneRuntime zone;
-    if (!parseZone(zoneObject, zone.config, usedGpios, usedAdsChannels, usedMcpChannels)) {
-      Serial.println("Invalid zone config or unsupported/duplicate hardware channel.");
-      return false;
+    const ZoneProvisioning& registration = PROVISIONING[index];
+    zone.config.zoneId = registration.zoneId;
+    zone.config.storageUnitId = registration.storageUnitId;
+    zone.config.sensorCode = registration.sensorCode;
+    zone.config.deviceId = registration.deviceId;
+    zone.config.apiKey = registration.apiKey;
+    zone.config.dhtGpio = hardware.dhtGpio;
+    zone.config.mq2.gpio = hardware.mq2Gpio;
+    zone.config.fan.gpio = hardware.fanGpio;
+    zone.config.fan.activeHigh = GRAINGUARD_FAN_ACTIVE_HIGH;
+    zone.config.led.gpio = hardware.ledGpio;
+    zone.config.led.activeHigh = true;
+    zone.config.registrationValid =
+        validZoneRegistration(registration) && !hasDuplicateRegistration(index);
+    if (!zone.config.registrationValid) {
+      Serial.printf("Zone %u registration missing or invalid; telemetry disabled for this zone.\n",
+                    static_cast<unsigned>(index + 1));
     }
-    if (!zoneIds.insert(std::string(zone.config.zoneId.c_str())).second ||
-        !sensorCodes.insert(std::string(zone.config.sensorCode.c_str())).second ||
-        !deviceIds.insert(std::string(zone.config.deviceId.c_str())).second) {
-      Serial.println("Zone IDs, sensor codes, and device IDs must be unique.");
-      return false;
-    }
-    makeStateKeys(zone);
+    makeStateKeys(zone, index);
     zones.push_back(std::move(zone));
   }
 
-  hasExpansionHardware = hasExpansionHardware || !usedAdsChannels.empty() || !usedMcpChannels.empty();
-  if (hasExpansionHardware) {
-    if (usedGpios.count(i2cSdaGpio) || usedGpios.count(i2cSclGpio)) {
-      Serial.println("I2C GPIO conflicts with a configured sensor or output.");
-      return false;
-    }
-  }
+  networkConfigurationValid = networkSettingsReady();
   return true;
-}
-
-uint8_t adsIndex(uint8_t address) {
-  return static_cast<uint8_t>(address - 0x48);
-}
-
-uint8_t mcpIndex(uint8_t address) {
-  return static_cast<uint8_t>(address - 0x20);
-}
-
-bool i2cDevicePresent(uint8_t address) {
-  Wire.beginTransmission(address);
-  return Wire.endTransmission() == 0;
 }
 
 class FanControllerAdapter {
  public:
   bool begin(const OutputChannel& output, bool active) {
     const bool level = active ? output.activeHigh : !output.activeHigh;
-    if (output.kind == OutputKind::Gpio) {
-      digitalWrite(output.gpio, level ? HIGH : LOW);
-      pinMode(output.gpio, OUTPUT);
-      digitalWrite(output.gpio, level ? HIGH : LOW);
-      return true;
-    }
-    if (!i2cDevicePresent(output.address)) return false;
-    Adafruit_MCP23X17& device = mcpDevices[mcpIndex(output.address)];
-    device.digitalWrite(output.channel, level ? HIGH : LOW);
-    device.pinMode(output.channel, OUTPUT);
-    device.digitalWrite(output.channel, level ? HIGH : LOW);
+    digitalWrite(output.gpio, level ? HIGH : LOW);
+    pinMode(output.gpio, OUTPUT);
+    digitalWrite(output.gpio, level ? HIGH : LOW);
     return true;
+  }
+
+  void release(const OutputChannel& output) {
+    pinMode(output.gpio, INPUT);
   }
 
   bool set(const OutputChannel& output, bool active) {
     const bool level = active ? output.activeHigh : !output.activeHigh;
-    if (output.kind == OutputKind::Gpio) {
-      digitalWrite(output.gpio, level ? HIGH : LOW);
-      return true;
-    }
-    if (!i2cDevicePresent(output.address)) return false;
-    mcpDevices[mcpIndex(output.address)].digitalWrite(
-        output.channel,
-        level ? HIGH : LOW);
+    digitalWrite(output.gpio, level ? HIGH : LOW);
     return true;
   }
 };
@@ -576,20 +396,9 @@ class FanControllerAdapter {
 class Mq2SensorAdapter {
  public:
   bool readRaw(const AnalogChannel& channel, uint16_t& value) const {
-    if (channel.kind == AnalogKind::Esp32Adc) {
-      const int reading = analogRead(channel.gpio);
-      if (reading < 0 || reading > 4095) return false;
-      value = static_cast<uint16_t>(reading);
-      return true;
-    }
-
-    if (!i2cDevicePresent(channel.address)) return false;
-    const int16_t reading =
-        adsDevices[adsIndex(channel.address)].readADC_SingleEnded(channel.channel);
-    if (reading < 0) return false;
-    const uint32_t normalized =
-        (static_cast<uint32_t>(reading) * 4095U + 16383U) / 32767U;
-    value = static_cast<uint16_t>(normalized > 4095U ? 4095U : normalized);
+    const int reading = analogRead(channel.gpio);
+    if (reading < 0 || reading > 4095) return false;
+    value = static_cast<uint16_t>(reading);
     return true;
   }
 };
@@ -598,45 +407,19 @@ FanControllerAdapter fanController;
 Mq2SensorAdapter mq2Sensor;
 
 bool initializeHardware() {
-  if (hasExpansionHardware) {
-    Wire.begin(i2cSdaGpio, i2cSclGpio);
-    Wire.setClock(100000);
-  }
-
-  for (const ZoneRuntime& zone : zones) {
-    if (zone.config.mq2.kind == AnalogKind::Ads1115) {
-      const uint8_t index = adsIndex(zone.config.mq2.address);
-      if (!adsReady[index]) {
-        if (!adsDevices[index].begin(zone.config.mq2.address, &Wire)) {
-          Serial.printf("ADS1115 0x%02X did not initialize.\n", zone.config.mq2.address);
-          return false;
-        }
-        adsDevices[index].setGain(GAIN_ONE);
-        adsReady[index] = true;
-      }
-    }
-    for (const OutputChannel* output : {&zone.config.fan, &zone.config.led}) {
-      if (output->kind == OutputKind::Mcp23017) {
-        const uint8_t index = mcpIndex(output->address);
-        if (!mcpReady[index]) {
-          if (!mcpDevices[index].begin_I2C(output->address, &Wire)) {
-            Serial.printf("MCP23017 0x%02X did not initialize.\n", output->address);
-            return false;
-          }
-          mcpReady[index] = true;
-        }
-      }
-    }
-  }
-
-  if (hasOutsideAirDht) outsideAirDht.begin(outsideAirGpio);
-  for (ZoneRuntime& zone : zones) {
+  for (size_t index = 0; index < zones.size(); index++) {
+    ZoneRuntime& zone = zones[index];
     zone.dht.begin(zone.config.dhtGpio);
-    if (!fanController.begin(zone.config.fan, false) ||
-        !fanController.begin(zone.config.led, false)) {
-      Serial.println("Could not initialize a configured output channel.");
-      return false;
-    }
+    analogSetPinAttenuation(zone.config.mq2.gpio, ADC_11db);
+    if (hardwareConfirmed) fanController.begin(zone.config.fan, false);
+    else fanController.release(zone.config.fan);
+    fanController.begin(zone.config.led, false);
+    Serial.printf("Zone %u DHT22: initialized on GPIO %u\n",
+                  static_cast<unsigned>(index + 1),
+                  static_cast<unsigned>(zone.config.dhtGpio));
+    Serial.printf("Zone %u MQ-2 ADC1: initialized on GPIO %u\n",
+                  static_cast<unsigned>(index + 1),
+                  static_cast<unsigned>(zone.config.mq2.gpio));
   }
   return true;
 }
@@ -656,6 +439,7 @@ bool enqueueRequest(
 }
 
 void enqueueFaultEvent(size_t zoneIndex, const char* event, const String& faultCode) {
+  if (!zones[zoneIndex].config.registrationValid || !networkConfigurationValid) return;
   JsonDocument document;
   document["event"] = event;
   document["device_id"] = zones[zoneIndex].config.deviceId;
@@ -666,15 +450,15 @@ void enqueueFaultEvent(size_t zoneIndex, const char* event, const String& faultC
   }
 }
 
-bool sendRequest(const PendingRequest& request) {
-  if (request.zoneIndex >= zones.size() || WiFi.status() != WL_CONNECTED) return false;
+int sendRequest(const PendingRequest& request) {
+  if (request.zoneIndex >= zones.size() || WiFi.status() != WL_CONNECTED) return -1;
   WiFiClientSecure tlsClient;
   tlsClient.setCACert(ROOT_CA_CERT);
   HTTPClient http;
   http.setConnectTimeout(5000);
   http.setTimeout(5000);
   const String url = String(GRAINGUARD_API_BASE_URL) + request.path;
-  if (!http.begin(tlsClient, url)) return false;
+  if (!http.begin(tlsClient, url)) return -1;
 
   http.addHeader("Content-Type", "application/json");
   http.addHeader(
@@ -683,31 +467,85 @@ bool sendRequest(const PendingRequest& request) {
   const int statusCode = http.POST(
       reinterpret_cast<uint8_t*>(const_cast<char*>(request.body)),
       strlen(request.body));
+  if (statusCode == 409) {
+    const String responseBody = http.getString();
+    if (responseBody.indexOf("DUPLICATE_MESSAGE_ID") >= 0) {
+      http.end();
+      return 208;
+    }
+  }
   http.end();
-  return statusCode >= 200 && statusCode < 300;
+  return statusCode;
 }
 
 void networkTask(void*) {
+  bool preferFault = true;
   for (;;) {
     PendingRequest request;
     QueueHandle_t queue = nullptr;
-    if (xQueueReceive(faultQueue, &request, 0) == pdTRUE) {
-      queue = faultQueue;
-    } else if (xQueueReceive(readingsQueue, &request, pdMS_TO_TICKS(250)) == pdTRUE) {
-      queue = readingsQueue;
+    if (preferFault) {
+      if (xQueueReceive(faultQueue, &request, 0) == pdTRUE) queue = faultQueue;
+      else if (xQueueReceive(readingsQueue, &request, 0) == pdTRUE) queue = readingsQueue;
+    } else {
+      if (xQueueReceive(readingsQueue, &request, 0) == pdTRUE) queue = readingsQueue;
+      else if (xQueueReceive(faultQueue, &request, 0) == pdTRUE) queue = faultQueue;
+    }
+    preferFault = !preferFault;
+
+    if (queue == nullptr) {
+      vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
     }
 
-    if (queue == nullptr) continue;
-    while (!sendRequest(request)) {
-      if (queue != faultQueue) {
-        PendingRequest urgentFault;
-        if (xQueueReceive(faultQueue, &urgentFault, 0) == pdTRUE) {
-          while (!sendRequest(urgentFault)) {
-            vTaskDelay(pdMS_TO_TICKS(5000));
-          }
-        }
+    const uint32_t now = millis();
+    if (static_cast<int32_t>(now - request.nextAttemptAt) < 0) {
+      if (xQueueSend(queue, &request, 0) != pdTRUE) {
+        Serial.printf("Retry queue full for zone %u; request dropped.\n",
+                      static_cast<unsigned>(request.zoneIndex + 1));
       }
-      vTaskDelay(pdMS_TO_TICKS(5000));
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+
+    const int statusCode = sendRequest(request);
+    if ((statusCode >= 200 && statusCode < 300) || statusCode == 208) {
+      Serial.printf("Zone %u API Status: %d%s\n",
+                    static_cast<unsigned>(request.zoneIndex + 1),
+                    statusCode,
+                    statusCode == 208 ? " (duplicate already stored)" : "");
+      continue;
+    }
+
+    if (statusCode == 401) {
+      Serial.printf("Zone %u API authentication failed; check its registered device key.\n",
+                    static_cast<unsigned>(request.zoneIndex + 1));
+    } else if (statusCode == 403) {
+      Serial.printf("Zone %u API rejected its device or registration mapping.\n",
+                    static_cast<unsigned>(request.zoneIndex + 1));
+    } else if (statusCode < 0) {
+      Serial.printf("Zone %u HTTP transport/TLS failure: %d\n",
+                    static_cast<unsigned>(request.zoneIndex + 1), statusCode);
+    } else {
+      Serial.printf("Zone %u API Status: %d\n",
+                    static_cast<unsigned>(request.zoneIndex + 1), statusCode);
+    }
+
+    const bool retryable =
+        statusCode < 0 || statusCode == 408 || statusCode == 429 || statusCode >= 500;
+    if (!retryable || request.attempts >= MAX_RETRY_ATTEMPTS) {
+      Serial.printf("Zone %u request discarded after %u attempts.\n",
+                    static_cast<unsigned>(request.zoneIndex + 1),
+                    static_cast<unsigned>(request.attempts + 1));
+      continue;
+    }
+
+    constexpr uint32_t RETRY_BACKOFF_MS[MAX_RETRY_ATTEMPTS] = {
+        2000, 5000, 10000, 20000, 30000};
+    request.nextAttemptAt = millis() + RETRY_BACKOFF_MS[request.attempts];
+    request.attempts++;
+    if (xQueueSend(queue, &request, 0) != pdTRUE) {
+      Serial.printf("Retry queue full for zone %u; request dropped.\n",
+                    static_cast<unsigned>(request.zoneIndex + 1));
     }
   }
 }
@@ -724,6 +562,7 @@ bool makeUtcTimestamp(char* output, size_t outputSize, time_t* epochSeconds) {
 
 void queueReading(size_t zoneIndex) {
   ZoneRuntime& zone = zones[zoneIndex];
+  if (!zone.config.registrationValid || !networkConfigurationValid) return;
   char recordedAt[32];
   time_t epochSeconds = 0;
   if (!makeUtcTimestamp(recordedAt, sizeof(recordedAt), &epochSeconds)) {
@@ -742,26 +581,34 @@ void queueReading(size_t zoneIndex) {
   else document["humidity"] = nullptr;
   if (zone.gasValid) document["gas_raw_value"] = zone.gasRaw;
   else document["gas_raw_value"] = nullptr;
-  document["fan_status"] = zone.fanOn;
+  if (hardwareConfirmed) document["fan_status"] = zone.fanOn;
+  else document["fan_status"] = nullptr;
   document["recorded_at"] = recordedAt;
 
   char messageId[128];
   snprintf(
       messageId,
       sizeof(messageId),
-      "%s-%lu-%lu",
-      zone.config.deviceId.c_str(),
+      "%s-%08lx-%lu-%lu",
+      zone.config.sensorCode.c_str(),
+      static_cast<unsigned long>(bootMessageId),
       static_cast<unsigned long>(epochSeconds),
       static_cast<unsigned long>(messageCounter++));
   document["message_id"] = messageId;
 
+  Serial.printf("Sending Zone %u data...\n", static_cast<unsigned>(zoneIndex + 1));
   if (!enqueueRequest(readingsQueue, zoneIndex, "/api/v1/sensors/readings", document)) {
-    Serial.printf("Reading queue full for zone %s; sample dropped.\n", zone.config.zoneId.c_str());
+    Serial.printf("Reading queue full for zone %u; sample dropped.\n",
+                  static_cast<unsigned>(zoneIndex + 1));
   }
 }
 
 bool setFanState(size_t zoneIndex, bool on, uint32_t now, bool ignoreMinimumInterval = false) {
   ZoneRuntime& zone = zones[zoneIndex];
+  if (!hardwareConfirmed) {
+    zone.fanOn = false;
+    return true;
+  }
   if (zone.fanOn == on) return fanController.set(zone.config.fan, on);
   if (!ignoreMinimumInterval) {
     const uint32_t minimum = zone.fanOn ? minFanOnMs : minFanOffMs;
@@ -836,17 +683,6 @@ void processSerialCommands() {
   }
 }
 
-void readOutsideAir(uint32_t now) {
-  outsideHumidityValid = false;
-  outsideHumidityPercent = NAN;
-  if (!hasOutsideAirDht) return;
-  if (outsideAirSampled && now - lastOutsideReadAt < sampleIntervalMs) return;
-  lastOutsideReadAt = now;
-  outsideAirSampled = true;
-  float outsideTemperatureC = NAN;
-  outsideHumidityValid = outsideAirDht.read(outsideTemperatureC, outsideHumidityPercent);
-}
-
 bool updateDemand(bool previous, float value, float onThreshold, float offThreshold) {
   if (value >= onThreshold) return true;
   if (value <= offThreshold) return false;
@@ -861,16 +697,19 @@ void sampleZone(size_t zoneIndex, uint32_t now) {
   zone.humidityValid = zone.temperatureValid;
   zone.gasValid = mq2Sensor.readRaw(zone.config.mq2, zone.gasRaw);
 
-  zone.sampleValid =
-      zone.temperatureValid &&
-      zone.humidityValid &&
-      zone.gasValid &&
-      (!hasOutsideAirDht || outsideHumidityValid);
+  zone.sampleValid = zone.temperatureValid && zone.humidityValid && zone.gasValid;
+  Serial.printf("Zone %u DHT22: %s\n",
+                static_cast<unsigned>(zoneIndex + 1),
+                zone.temperatureValid ? "OK" : "READ FAILED");
+  Serial.printf("Zone %u MQ-2 ADC: %s",
+                static_cast<unsigned>(zoneIndex + 1),
+                zone.gasValid ? "OK" : "READ FAILED");
+  if (zone.gasValid) Serial.printf(" (%u raw)", static_cast<unsigned>(zone.gasRaw));
+  Serial.println();
   if (!zone.sampleValid) {
     String faultCode = "ZONE_SENSOR_INVALID";
     if (!zone.temperatureValid || !zone.humidityValid) faultCode = "DHT22_INVALID";
     else if (!zone.gasValid) faultCode = "MQ2_ADC_UNAVAILABLE";
-    else if (hasOutsideAirDht && !outsideHumidityValid) faultCode = "OUTSIDE_DHT22_INVALID";
     beginFault(zoneIndex, faultCode, now);
   } else {
     zone.lastGoodSampleAt = now;
@@ -901,28 +740,8 @@ void sampleZone(size_t zoneIndex, uint32_t now) {
       zone.config.temperatureOnC,
       zone.config.temperatureOffC);
 
-  const bool humidityCanVentilate =
-      hasOutsideAirDht &&
-      outsideHumidityValid &&
-      outsideHumidityPercent < zone.humidityPercent;
-  zone.humidityDemand =
-      humidityCanVentilate
-          ? updateDemand(
-                zone.humidityDemand,
-                zone.humidityPercent,
-                zone.config.humidityOnPercent,
-                zone.config.humidityOffPercent)
-          : false;
-
-  const bool desiredFanOn = zone.temperatureDemand || zone.humidityDemand;
-  const bool humidityInhibit =
-      !zone.temperatureDemand &&
-      zone.humidityDemand == false &&
-      zone.fanOn &&
-      hasOutsideAirDht &&
-      outsideHumidityValid &&
-      outsideHumidityPercent >= zone.humidityPercent;
-  if (!setFanState(zoneIndex, desiredFanOn, now, humidityInhibit)) {
+  zone.humidityDemand = false;
+  if (!setFanState(zoneIndex, zone.temperatureDemand, now)) {
     beginFault(zoneIndex, "FAN_CONTROLLER_UNAVAILABLE", now);
   }
 }
@@ -936,7 +755,8 @@ void enforceFaultTimeouts(uint32_t now) {
     zone.faultLatched = true;
     stateStore.putBool(zone.faultStateKey, true);
     setFanState(index, false, now, true);
-    Serial.printf("SENSOR_FAULT latched; fan forced OFF for zone %s.\n", zone.config.zoneId.c_str());
+    Serial.printf("SENSOR_FAULT latched; fan forced OFF for zone %u.\n",
+                  static_cast<unsigned>(index + 1));
   }
 }
 
@@ -952,13 +772,22 @@ void beginWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(GRAINGUARD_WIFI_SSID, GRAINGUARD_WIFI_PASSWORD);
   nextWifiAttemptAt = millis() + 10000U;
+  Serial.println("Connecting to Wi-Fi...");
 }
 
 void maintainWifi(uint32_t now) {
-  if (WiFi.status() == WL_CONNECTED || now < nextWifiAttemptAt) return;
+  if (!networkConfigurationValid) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!wifiWasConnected) Serial.println("WiFi Connected");
+    wifiWasConnected = true;
+    return;
+  }
+  wifiWasConnected = false;
+  if (static_cast<int32_t>(now - nextWifiAttemptAt) < 0) return;
   WiFi.disconnect();
   WiFi.begin(GRAINGUARD_WIFI_SSID, GRAINGUARD_WIFI_PASSWORD);
   nextWifiAttemptAt = now + 10000U;
+  Serial.println("WiFi unavailable; retrying connection.");
 }
 
 void restoreZoneState(size_t zoneIndex) {
@@ -966,7 +795,8 @@ void restoreZoneState(size_t zoneIndex) {
   zone.faultLatched = stateStore.getBool(zone.faultStateKey, false);
   zone.fanOn = hardwareConfirmed && !zone.faultLatched &&
                stateStore.getBool(zone.fanStateKey, false);
-  fanController.begin(zone.config.fan, zone.fanOn);
+  if (hardwareConfirmed) fanController.begin(zone.config.fan, zone.fanOn);
+  else fanController.release(zone.config.fan);
   fanController.begin(zone.config.led, false);
   zone.ledState = false;
   zone.lastFanSwitchAt = millis();
@@ -981,44 +811,58 @@ void restoreZoneState(size_t zoneIndex) {
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("GrainGuard ESP32 Starting...");
   analogReadResolution(12);
+  bootMessageId = esp_random();
 
-  if (!LittleFS.begin(false)) {
-    Serial.println("LittleFS mount failed; automatic control is disabled.");
-    return;
-  }
   if (!loadConfiguration()) {
-    Serial.println("Configuration rejected; outputs remain at their hardware-safe defaults.");
+    Serial.println("Compile-time configuration rejected; sensors will not start.");
     return;
   }
   if (!initializeHardware()) {
-    Serial.println("Hardware initialization failed; check expansion devices and wiring.");
+    Serial.println("Hardware initialization failed; check sensor wiring.");
     return;
   }
 
   stateStore.begin("gg_zones", false);
-  const UBaseType_t readingsQueueLength = static_cast<UBaseType_t>(zones.size() + 8);
-  const UBaseType_t faultQueueLength = static_cast<UBaseType_t>((zones.size() * 2) + 8);
-  readingsQueue = xQueueCreate(readingsQueueLength, sizeof(PendingRequest));
-  faultQueue = xQueueCreate(faultQueueLength, sizeof(PendingRequest));
-  if (readingsQueue == nullptr || faultQueue == nullptr) {
-    Serial.println("Network queue allocation failed; firmware will not run.");
-    return;
+  bool hasRegisteredZone = false;
+  for (size_t index = 0; index < zones.size(); index++) {
+    hasRegisteredZone = hasRegisteredZone || zones[index].config.registrationValid;
+    restoreZoneState(index);
+  }
+
+  if (networkConfigurationValid && hasRegisteredZone) {
+    const UBaseType_t readingsQueueLength = static_cast<UBaseType_t>((ZONE_COUNT * 4) + 8);
+    const UBaseType_t faultQueueLength = static_cast<UBaseType_t>((ZONE_COUNT * 2) + 8);
+    readingsQueue = xQueueCreate(readingsQueueLength, sizeof(PendingRequest));
+    faultQueue = xQueueCreate(faultQueueLength, sizeof(PendingRequest));
+    if (readingsQueue == nullptr || faultQueue == nullptr) {
+      Serial.println("Network queue allocation failed; sensor polling remains active without telemetry.");
+      networkConfigurationValid = false;
+    } else {
+      beginWifi();
+      configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+      if (xTaskCreatePinnedToCore(networkTask, "gg-network", 8192, nullptr, 1, nullptr, 0) != pdPASS) {
+        Serial.println("Network task creation failed; sensor polling remains active without telemetry.");
+        networkConfigurationValid = false;
+      }
+    }
+  } else {
+    networkConfigurationValid = false;
+    Serial.println("Telemetry disabled: provide valid Wi-Fi/TLS settings and actual sensor registrations.");
   }
 
   configurationValid = true;
-  for (size_t index = 0; index < zones.size(); index++) restoreZoneState(index);
-  beginWifi();
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  xTaskCreatePinnedToCore(networkTask, "gg-network", 8192, nullptr, 1, nullptr, 0);
 
   if (!hardwareConfirmed) {
-    Serial.println("hardware_confirmed is false: sensors report, but all fan automation remains OFF.");
+    if (GRAINGUARD_HARDWARE_CONFIRMED && !GRAINGUARD_FAN_POLARITY_CONFIRMED) {
+      Serial.println("Fan polarity is not confirmed: fan outputs are released and automation remains OFF.");
+    } else {
+      Serial.println("Hardware is unconfirmed: fan outputs are released and automation remains OFF.");
+    }
   }
-  if (!hasOutsideAirDht) {
-    Serial.println("No outside-air DHT22 configured: humidity-based ventilation is inhibited.");
-  }
-  Serial.printf("Loaded %u independently configured zones.\n", static_cast<unsigned>(zones.size()));
+  Serial.println("No outside-air humidity sensor configured; humidity-only ventilation is inhibited.");
+  Serial.printf("Initialized %u fixed zones.\n", static_cast<unsigned>(zones.size()));
 }
 
 void loop() {
@@ -1031,9 +875,8 @@ void loop() {
   const uint32_t now = millis();
   maintainWifi(now);
 
-  if (now >= nextSampleAt) {
+  if (static_cast<int32_t>(now - nextSampleAt) >= 0) {
     nextSampleAt = now + sampleIntervalMs;
-    readOutsideAir(now);
     for (size_t index = 0; index < zones.size(); index++) {
       sampleZone(index, now);
       enforceFaultTimeouts(now);

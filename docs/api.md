@@ -29,6 +29,20 @@ Example request:
 
 The route verifies the Supabase user and confirms the unit and zone belong together and are owned by that user. A successful response (`201`) returns the device-specific `device_api_key` exactly once. Store it securely on that device. The response never includes the service-role key.
 
+## Rotate an existing sensor credential
+
+`POST /api/v1/sensors/{sensor-record-uuid}/credentials/rotate`
+
+Requires a Supabase user access token for the storage-unit owner or an account whose protected profile role is `admin`:
+
+```http
+Authorization: Bearer <user_access_token>
+```
+
+The path uses the sensor table's UUID primary key, not `sensor_code`. The route verifies the sensor, storage-unit, and zone relationships and updates the existing credential hash; it does not create another sensor registration. The response includes the sensor's identifiers and the new `device_api_key`, returned once with `Cache-Control: no-store`. The previous key stops working immediately. Update the device's private `zones.json` with the returned key before expecting readings from that sensor to authenticate. Lost keys cannot be recovered from the database because only their SHA-256 hashes are stored. Concurrent rotations are guarded so only one request can replace a given current credential.
+
+Do not invoke this endpoint unless you intend to rotate that sensor's key. Never send the returned key to logs, source control, or an untrusted client.
+
 ## Submit a sensor reading
 
 `POST /api/v1/sensors/readings`

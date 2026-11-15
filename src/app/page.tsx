@@ -582,6 +582,61 @@ export default function Home() {
                 <SensorCard icon={<Fan size={19} />} label="Ventilation" value={reading?.fanStatus === null || reading?.fanStatus === undefined ? "—" : reading.fanStatus ? "On" : "Off"} unit="" foot={reading?.fanStatus === null || reading?.fanStatus === undefined ? "Fan status not available" : "Reported device state"} state={reading?.fanStatus === null || reading?.fanStatus === undefined ? "Unavailable" : "Reported"} tone="purple" />
               </div>
 
+              {!demoMode && (
+                <section className="panel live-zones-panel" aria-live="polite">
+                  <div className="panel-heading">
+                    <div>
+                      <h3>Latest readings by zone</h3>
+                      <p>Authorized sensor data · live updates with 30-second refresh</p>
+                    </div>
+                    <span className="updated-label">
+                      {!sensorData.authenticated
+                        ? "Sign-in required"
+                        : sensorData.refreshing
+                          ? "Refreshing…"
+                          : sensorData.error
+                            ? "Refresh issue"
+                            : "Auto-refresh: 30s"}
+                    </span>
+                  </div>
+                  {!sensorData.authenticated ? (
+                    <div className="live-zones-empty">Sign in from Settings to load readings for your authorized zones.</div>
+                  ) : sensorData.zoneReadings.length === 0 ? (
+                    <div className="live-zones-empty">
+                      {sensorData.refreshing ? "Loading registered storage zones…" : "No authorized storage zones were found."}
+                    </div>
+                  ) : (
+                    <div className="live-zones-grid">
+                      {sensorData.zoneReadings.map(({ zone, reading: zoneReading }) => (
+                        <article className="live-zone-card" key={zone.id}>
+                          <div className="live-zone-heading">
+                            <strong>{zone.name}</strong>
+                            <span>{zone.number !== null ? `Zone ${zone.number}` : "Registered zone"}</span>
+                          </div>
+                          <div className="live-zone-metrics">
+                            <div>
+                              <span>Temperature</span>
+                              <strong>{zoneReading?.temperature === null || zoneReading?.temperature === undefined ? "—" : `${zoneReading.temperature.toFixed(1)} °C`}</strong>
+                            </div>
+                            <div>
+                              <span>Humidity</span>
+                              <strong>{zoneReading?.humidity === null || zoneReading?.humidity === undefined ? "—" : `${zoneReading.humidity.toFixed(1)} %`}</strong>
+                            </div>
+                            <div>
+                              <span>MQ-2 raw</span>
+                              <strong>{zoneReading?.gas_raw_value === null || zoneReading?.gas_raw_value === undefined ? "—" : `${zoneReading.gas_raw_value} ADC`}</strong>
+                            </div>
+                          </div>
+                          <time className="live-zone-timestamp" dateTime={zoneReading?.recorded_at}>
+                            {zoneReading ? `Latest reading: ${new Date(zoneReading.recorded_at).toLocaleString()}` : "No readings yet"}
+                          </time>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+
               <div className="charts-row">
                 {demoMode ? <DemoChart crop={crop} kind="temperature" /> : <SensorHistoryChart readings={sensorData.readings} metric="temperature" title="Air temperature history" unit="°C" kind="temperature" />}
                 {demoMode ? <DemoChart crop={crop} kind="humidity" /> : <SensorHistoryChart readings={sensorData.readings} metric="humidity" title="Relative humidity history" unit="% RH" kind="humidity" />}

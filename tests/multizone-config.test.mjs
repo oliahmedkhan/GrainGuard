@@ -2,89 +2,88 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const configDirectory = path.resolve(
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const firmwarePath = path.join(
+  root,
   "examples",
   "esp32",
   "GrainGuardMultiZone",
-  "data"
+  "GrainGuardMultiZone.ino"
+);
+const configExamplePath = path.join(
+  root,
+  "examples",
+  "esp32",
+  "GrainGuardMultiZone",
+  "grainguard_config.example.h"
+);
+const secretsExamplePath = path.join(
+  root,
+  "examples",
+  "esp32",
+  "GrainGuardMultiZone",
+  "grainguard_secrets.example.h"
 );
 
-function readConfig(filename) {
-  return JSON.parse(readFileSync(path.join(configDirectory, filename), "utf8"));
-}
+const firmware = readFileSync(firmwarePath, "utf8");
+const configExample = readFileSync(configExamplePath, "utf8");
+const secretsExample = readFileSync(secretsExamplePath, "utf8");
 
-for (const [filename, expectedZones] of [
-  ["zones-3.example.json", 3],
-  ["zones-5.example.json", 5],
-  ["zones-10.example.json", 10],
-]) {
-  test(`${filename} has ${expectedZones} valid, non-conflicting zone slots`, () => {
-    const config = readConfig(filename);
-    assert.equal(config.zones.length, expectedZones);
-    assert.equal(config.hardware_confirmed, false);
-    assert.equal(config.timing.sensor_fault_hold_ms, 120000);
+test("the compiled firmware uses the exact three-zone GPIO map without conflicts", () => {
+  const hardwareBlock = firmware.match(
+    /constexpr ZoneHardware HARDWARE\[ZONE_COUNT\] = \{([\s\S]*?)\};/
+  );
+  assert.ok(hardwareBlock, "fixed zone hardware map must exist");
 
-    const gpioAssignments = [];
-    const adsChannels = new Set();
-    const mcpChannels = new Set();
-    let hasAds = false;
-    let hasMcp = false;
+  const mappings = [...hardwareBlock[1].matchAll(/\{(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\}/g)]
+    .map((match) => match.slice(1).map(Number));
+  assert.deepEqual(mappings, [
+    [4, 34, 18, 25],
+    [16, 35, 19, 26],
+    [17, 32, 21, 27],
+  ]);
+  const pins = mappings.flat();
+  assert.equal(new Set(pins).size, pins.length, "all sensor and output pins must be unique");
+  assert.ok([34, 35, 32].every((pin) => [32, 33, 34, 35, 36, 39].includes(pin)));
+});
 
-    if (config.outside_air) gpioAssignments.push(config.outside_air.gpio);
+test("firmware has no runtime filesystem dependency and validates local registrations", () => {
+  assert.match(firmware, /#include "grainguard_config\.h"/);
+  assert.match(firmware, /#include "grainguard_config\.example\.h"/);
+  assert.doesNotMatch(firmware, /LittleFS|zones\.json/);
+  assert.match(firmware, /validZoneRegistration/);
+  assert.match(firmware, /GRAINGUARD_SENSOR_FAULT_HOLD_MS/);
+});
 
-    for (const zone of config.zones) {
-      assert.equal(zone.zone_id, "");
-      assert.equal(zone.storage_unit_id, "");
-      assert.equal(zone.sensor_code, "");
-      assert.equal(zone.device_id, "");
-      assert.equal(zone.device_api_key, "");
-      assert.equal(zone.dht22.kind, "gpio");
-      assert.deepEqual(zone.thresholds, {
-        temperature_on_c: 30,
-        temperature_off_c: 28,
-        humidity_on_pct: 70,
-        humidity_off_pct: 65,
-      });
-
-      gpioAssignments.push(zone.dht22.gpio);
-      if (zone.mq2.kind === "esp32_adc") {
-        gpioAssignments.push(zone.mq2.gpio);
-      } else {
-        assert.equal(zone.mq2.kind, "ads1115");
-        assert.ok(["0x48", "0x49", "0x4A", "0x4B"].includes(zone.mq2.address));
-        assert.ok(zone.mq2.channel >= 0 && zone.mq2.channel <= 3);
-        const key = `${zone.mq2.address}:${zone.mq2.channel}`;
-        assert.equal(adsChannels.has(key), false, `duplicate ADS1115 channel ${key}`);
-        adsChannels.add(key);
-        hasAds = true;
-      }
-
-      for (const output of [zone.fan, zone.led]) {
-        if (output.kind === "gpio") {
-          gpioAssignments.push(output.gpio);
-          assert.equal(typeof output.active_high, "boolean");
-        } else {
-          assert.equal(output.kind, "mcp23017");
-          assert.ok(["0x20", "0x21", "0x22", "0x23", "0x24", "0x25", "0x26", "0x27"].includes(output.address));
-          assert.ok(output.channel >= 0 && output.channel <= 15);
-          const key = `${output.address}:${output.channel}`;
-          assert.equal(mcpChannels.has(key), false, `duplicate MCP23017 channel ${key}`);
-          mcpChannels.add(key);
-          hasMcp = true;
-        }
-      }
+test("configuration templates contain only blank identities and safe placeholders", () => {
+  for (const zone of [1, 2, 3]) {
+    for (const field of [
+      "ZONE_ID",
+      "STORAGE_UNIT_ID",
+      "SENSOR_CODE",
+      "DEVICE_ID",
+      "DEVICE_API_KEY",
+    ]) {
+      assert.match(
+        configExample,
+        new RegExp(`#define GRAINGUARD_ZONE_${zone}_${field} ""`)
+      );
     }
+  }
+  assert.match(secretsExample, /your-wifi-ssid/);
+  assert.match(secretsExample, /your-wifi-password/);
+  assert.match(secretsExample, /REPLACE_WITH_TRUSTED_ROOT_CA_CERTIFICATE/);
+  assert.doesNotMatch(secretsExample, /-----BEGIN CERTIFICATE-----/);
+});
 
-    if (hasAds || hasMcp) gpioAssignments.push(config.i2c.sda_gpio, config.i2c.scl_gpio);
-    assert.equal(
-      new Set(gpioAssignments).size,
-      gpioAssignments.length,
-      "GPIO assignments must not conflict"
-    );
-    if (expectedZones === 10) {
-      assert.equal(new Set([...adsChannels].map((key) => key.split(":")[0])).size, 3);
-      assert.equal(new Set([...mcpChannels].map((key) => key.split(":")[0])).size, 2);
-    }
-  });
-}
+test("readings preserve the registered sensor code and TLS certificate validation", () => {
+  assert.match(firmware, /document\["sensor_id"\]\s*=\s*zone\.config\.sensorCode/);
+  assert.match(firmware, /String\("Bearer "\)\s*\+\s*zones\[request\.zoneIndex\]\.config\.apiKey/);
+  assert.match(firmware, /tlsClient\.setCACert\(ROOT_CA_CERT\)/);
+  assert.doesNotMatch(firmware, /setInsecure\s*\(/);
+  for (const key of ["device_id", "sensor_id", "storage_unit_id", "zone_id", "recorded_at", "message_id", "fan_status"]) {
+    assert.match(firmware, new RegExp(`document\\["${key}"\\]`));
+  }
+});

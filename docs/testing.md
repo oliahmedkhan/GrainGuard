@@ -9,6 +9,7 @@ Run from the application directory:
 ```powershell
 npm.cmd run test:sensors
 npm.cmd run test:multizone
+npm.cmd run test:credential-rotation
 npm.cmd run lint
 npm.cmd run build
 ```
@@ -21,6 +22,8 @@ npm.cmd run build
 - `npm.cmd audit --omit=dev`: **0 production dependency vulnerabilities**.
 
 These are local code checks only. They do not prove that the migration applies on a hosted Supabase project or that hardware can reach the endpoint.
+
+The credential-rotation unit tests cover sensor UUID validation, owner/admin authorization, and secure API key hashing. They do not rotate a live device credential; live endpoint authorization and Supabase update behavior still require a configured test project.
 
 The multi-zone configuration tests parse all three JSON examples, check their zone counts, ensure identifiers and API-key fields remain blank, and detect GPIO/I2C channel conflicts. The Arduino IDE firmware was not compiled in this environment because Arduino CLI and an ESP32 board package were unavailable; no physical hardware tests were possible.
 

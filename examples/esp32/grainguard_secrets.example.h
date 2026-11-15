@@ -1,13 +1,13 @@
 #pragma once
 
-#define GRAINGUARD_WIFI_SSID "replace-with-wifi-name"
-#define GRAINGUARD_WIFI_PASSWORD "replace-with-wifi-password"
-#define GRAINGUARD_API_URL "https://your-host.example/api/v1/sensors/readings"
+#define GRAINGUARD_WIFI_SSID "OLI"
+#define GRAINGUARD_WIFI_PASSWORD "11111111"
+#define GRAINGUARD_API_URL "https://grain-guard-rosy.vercel.app"
 #define GRAINGUARD_DEVICE_API_KEY "replace-with-one-time-device-key"
 #define GRAINGUARD_DEVICE_ID "GG-ESP32-001"
 #define GRAINGUARD_SENSOR_CODE "GG-SENSOR-001"
 #define GRAINGUARD_STORAGE_UNIT_ID "replace-with-storage-unit-uuid"
-#define GRAINGUARD_ZONE_ID "replace-with-zone-uuid"
+#define GRAINGUARD_ZONE_ID "001"
 
 #define ROOT_CA_CERT R"PEM(
 -----BEGIN CERTIFICATE-----

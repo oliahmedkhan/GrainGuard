@@ -148,6 +148,21 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .simulated-pill > span { width: 5px; height: 5px; border-radius: 50%; background: #edb660; }
 .environment-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .sensor-card { min-height: 144px; padding: 13px 14px 12px; }
+.live-zones-panel { margin-bottom: 12px; padding: 14px; }
+.live-zones-panel .panel-heading { margin-bottom: 12px; }
+.live-zones-panel .panel-heading h3 { margin: 0 0 4px; color: #e6edf2; font-size: 13px; font-weight: 620; }
+.live-zones-panel .panel-heading p { margin: 0; color: #788998; font-size: 9px; }
+.live-zones-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.live-zone-card { min-width: 0; padding: 12px; border: 1px solid var(--border-soft); border-radius: 9px; background: rgba(13,20,28,.58); }
+.live-zone-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.live-zone-heading strong { overflow: hidden; color: #e6edf2; font-size: 11px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+.live-zone-heading span { flex: 0 0 auto; color: #8293a1; font-size: 8px; }
+.live-zone-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.live-zone-metrics div { min-width: 0; }
+.live-zone-metrics span { display: block; color: #788998; font-size: 8px; }
+.live-zone-metrics strong { display: block; overflow: hidden; margin-top: 3px; color: #edf2f5; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.live-zone-timestamp { display: block; margin-top: 12px; color: #728392; font-size: 8px; }
+.live-zones-empty { padding: 12px; color: #8b9aa6; font-size: 10px; }
 .sensor-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .sensor-state, .zone-status { display: inline-flex; align-items: center; gap: 5px; color: #758696; font-size: 8px; white-space: nowrap; }
 .sensor-state i, .zone-status i { width: 5px; height: 5px; border-radius: 50%; background: #71808d; }
@@ -317,6 +332,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 }
 @media (max-width: 900px) {
   .kpi-grid, .environment-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .live-zones-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .bottom-grid { grid-template-columns: 1fr; }
   .monitoring-layout, .module-layout { grid-template-columns: 1fr; }
   .zone-panel, .status-panel { min-height: 0; }
@@ -351,6 +367,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .kpi-card { min-height: 118px; padding: 11px; }
   .kpi-value { font-size: 20px; }
   .environment-grid { gap: 8px; }
+  .live-zones-grid { grid-template-columns: 1fr; gap: 8px; }
   .sensor-card { min-height: 139px; padding: 11px; }
   .sensor-state { max-width: 72px; overflow: hidden; text-overflow: ellipsis; }
   .charts-row { grid-template-columns: 1fr; gap: 8px; }

@@ -56,7 +56,7 @@
       "device_id": "",
       "device_api_key": "",
       "dht22": { "kind": "gpio", "gpio": 17 },
-      "mq2": { "kind": "esp32_adc", "gpio": 36 },
+      "mq2": { "kind": "esp32_adc", "gpio": 32 },
       "fan": { "kind": "gpio", "gpio": 21, "active_high": true },
       "led": { "kind": "gpio", "gpio": 27, "active_high": true },
       "thresholds": {
